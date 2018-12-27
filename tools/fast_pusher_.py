@@ -34,9 +34,9 @@ from containerregistry.client.v2_2 import oci_compat
 from containerregistry.tools import logging_setup
 from containerregistry.tools import patched
 from containerregistry.transport import retry
+from containerregistry.transport import transport
 from containerregistry.transport import transport_pool
 
-import httplib2
 from six.moves import zip  # pylint: disable=redefined-builtin
 
 
@@ -79,6 +79,9 @@ parser.add_argument(
 
 parser.add_argument(
     '--oci', action='store_true', help='Push the image with an OCI Manifest.')
+
+parser.add_argument(
+  '--cacert', help='The CA certificate to use.')
 
 parser.add_argument(
     '--client-config-dir',
@@ -156,9 +159,11 @@ def main():
   if args.client_config_dir is not None:
     docker_creds.DefaultKeychain.setCustomConfigDir(args.client_config_dir)
 
-  retry_factory = retry.Factory()
-  retry_factory = retry_factory.WithSourceTransportCallable(httplib2.Http)
-  transport = transport_pool.Http(retry_factory.Build, size=_THREADS)
+  transport_factory = transport.Factory()
+  if args.cacert is not None:
+    transport_factory = transport_factory.WithCaCert(args.cacert)
+  retry_factory = retry.Factory().WithSourceTransportFactory(transport_factory)
+  transports_pool = transport_pool.Http(retry_factory.Build, size=_THREADS)
 
   logging.info('Loading v2.2 image from disk ...')
   with v2_2_image.FromDisk(
@@ -177,7 +182,7 @@ def main():
 
     try:
       with docker_session.Push(
-          name, creds, transport, threads=_THREADS) as session:
+          name, creds, transports_pool, threads=_THREADS) as session:
         logging.info('Starting upload ...')
         if args.oci:
           with oci_compat.OCIFromV22(v2_2_img) as oci_img:

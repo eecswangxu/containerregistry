@@ -27,6 +27,7 @@ from containerregistry.client.v2_2 import docker_image as v2_2_image
 from containerregistry.client.v2_2 import docker_session
 from containerregistry.tools import logging_setup
 from containerregistry.tools import patched
+from containerregistry.transport import transport
 from containerregistry.transport import transport_pool
 
 import httplib2
@@ -47,6 +48,9 @@ parser.add_argument(
     '--dst-image', action='store', help='The name of the new image.',
     required=True)
 
+parser.add_argument(
+  '--cacert', help='The CA certificate to use.')
+
 _THREADS = 8
 
 
@@ -55,7 +59,10 @@ def main():
   args = parser.parse_args()
   logging_setup.Init(args=args)
 
-  transport = transport_pool.Http(httplib2.Http, size=_THREADS)
+  transport_factory = transport.Factory()
+  if args.cacert is not None:
+    transport_factory = transport_factory.WithCaCert(args.cacert)
+  transports_pool = transport_pool.Http(transport_factory.Build, size=_THREADS)
 
   # This library can support push-by-digest, but the likelihood of a user
   # correctly providing us with the digest without using this library

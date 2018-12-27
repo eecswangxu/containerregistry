@@ -32,9 +32,8 @@ from containerregistry.tools import logging_setup
 from containerregistry.tools import patched
 from containerregistry.tools import platform_args
 from containerregistry.transport import retry
+from containerregistry.transport import transport
 from containerregistry.transport import transport_pool
-
-import httplib2
 
 
 parser = argparse.ArgumentParser(
@@ -51,10 +50,14 @@ parser.add_argument(
     '--tarball', action='store', help='Where to save the image tarball.',
     required=True)
 
+parser.add_argument(
+  '--cacert', help='The CA certificate to use.')
+
 platform_args.AddArguments(parser)
 
 _DEFAULT_TAG = 'i-was-a-digest'
 
+_THREADS = 8
 
 # Today save.tarball expects a tag, which is emitted into one or more files
 # in the resulting tarball.  If we don't translate the digest into a tag then
@@ -80,9 +83,11 @@ def main():
   args = parser.parse_args()
   logging_setup.Init(args=args)
 
-  retry_factory = retry.Factory()
-  retry_factory = retry_factory.WithSourceTransportCallable(httplib2.Http)
-  transport = transport_pool.Http(retry_factory.Build, size=8)
+  transport_factory = transport.Factory()
+  if args.cacert is not None:
+    transport_factory = transport_factory.WithCaCert(args.cacert)
+  retry_factory = retry.Factory().WithSourceTransportFactory(transport_factory)
+  transports_pool = transport_pool.Http(retry_factory.Build, size=_THREADS)
 
   if '@' in args.name:
     name = docker_name.Digest(args.name)
@@ -110,7 +115,7 @@ def main():
   try:
     with tarfile.open(name=args.tarball, mode='w:') as tar:
       logging.info('Pulling manifest list from %r ...', name)
-      with image_list.FromRegistry(name, creds, transport) as img_list:
+      with image_list.FromRegistry(name, creds, transports_pool) as img_list:
         if img_list.exists():
           platform = platform_args.FromArgs(args)
           # pytype: disable=wrong-arg-types
@@ -120,13 +125,13 @@ def main():
           # pytype: enable=wrong-arg-types
 
       logging.info('Pulling v2.2 image from %r ...', name)
-      with v2_2_image.FromRegistry(name, creds, transport, accept) as v2_2_img:
+      with v2_2_image.FromRegistry(name, creds, transports_pool, accept) as v2_2_img:
         if v2_2_img.exists():
           save.tarball(_make_tag_if_digest(name), v2_2_img, tar)
           return
 
       logging.info('Pulling v2 image from %r ...', name)
-      with v2_image.FromRegistry(name, creds, transport) as v2_img:
+      with v2_image.FromRegistry(name, creds, transports_pool) as v2_img:
         with v2_compat.V22FromV2(v2_img) as v2_2_img:
           save.tarball(_make_tag_if_digest(name), v2_2_img, tar)
           return
